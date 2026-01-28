@@ -1,5 +1,5 @@
 ---
-title: "Flume: A Lightweight Framework for Multidisciplinary Design Optimization based on Directed Acyclic Graphs"
+title: "Flume: A Lightweight Framework for Numerical Design Optimization based on Directed Acyclic Graphs"
 tags:
   - Multidisciplinary design optimization
   - Optimization framework
@@ -16,7 +16,7 @@ affiliations:
   - name: Georgia Institute of Technology, United States
     index: 1
     ror: 01zkghx44
-date: 17 December 2025
+date: 28 January 2026
 bibliography: paper.bib
 ---
 
@@ -36,7 +36,7 @@ The first class, _State_, simply provides an object that stores numerical data a
 _Analysis_ is the foundation of Flume, and its primary task is to execute the forward and adjoint procedures to obtain the outputs and derivatives needed for optimization.
 Finally, _System_ provides a set of methods to declare the objective function, constraints, and design variables that will be used within the optimization problem, as well as a means to visualize the DAG.
 To utilize Flume, a user's primary responsibility is to construct the individual analyses, inherited from the _Analysis_ base class, that are needed for their _System_.
-By adhering to a few architectural requirements when scripting these analyses, the framework's backend will automatically connect outputs to variables that share the same name.
+By adhering to a set of syntax and architectural requirements when scripting these analyses, the framework's backend will automatically connect outputs to variables that share the same name.
 This provides the user with a streamlined workflow, enabling them to focus on implementing new features and procedures instead of managing the integration.
 
 The structure of _Flume_ is visualized in \autoref{fig:abstractsystem}, which depicts an abstracted _System_ that encapsulates four distinct _Analysis_ objects.
@@ -52,7 +52,7 @@ Numerical optimization is a field with a diverse range of applications, and, in 
 The development of frameworks for organizing and solving these problems is a topic that has been addressed by others in the past.
 Investigations of these frameworks has exposed a set of requirements for optimization frameworks, including modularity, intuitive user interfaces, object-oriented principles, and minimal overhead [@salas1998framework, @padula2006multidisciplinary].
 These attributes, among others, are critical components to ensuring that an optimization framework is extensible to a multitude of disciplines and accessible by a variety of individuals.
-While there are many design optimization frameworks that have been developed since the late 20th century, a few are listed below to highlight the current state of the art.
+While there are many design optimization frameworks that have been developed since the late 20th century, a few are listed below to highlight the progress in this field.
 
 - _ASTROS_: one of the first examples of an optimization framework, _ASTROS_ performs preliminary structural design using numerical optimization based on the finite-element method [@astros]
 - _DAKOTA_: developed by Sandia National Laboratories, _DAKOTA_ is a software suite written in C++ that provides methods for a variety of analyses, including gradient-based and gradient-free optimization [@dakota]
