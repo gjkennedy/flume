@@ -1,7 +1,7 @@
-Base Class Reference
---------------------
+Primary Class Reference
+-----------------------
 
-This page outlines the three base classes for *Flume*: *Analysis*, *State*, and *System*.
+This page outlines the three primary classes for *Flume*: *Analysis*, *State*, and *System*.
 
 .. automodule:: flume.base_classes.analysis 
     :members:
