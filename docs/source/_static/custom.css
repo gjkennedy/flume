@@ -38,9 +38,7 @@
 
 /* Main Icon */
 a.icon.icon-home {
-  color: #333333;
-  font-weight: bold;
-  font-style: italic;
+  display: none;
 }
 
 /* Main content area */
@@ -90,6 +88,10 @@ p {
   text-align: justify
 }
 
+/* Hide project name text below logo */
+.wy-side-nav-search .project-name {
+  display: none;
+}
 
 /* Default */
 /* Sidebar background and links

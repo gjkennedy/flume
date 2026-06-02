@@ -3,7 +3,7 @@
 [![Run Unittests](https://github.com/smdogroup/flume/actions/workflows/test.yml/badge.svg)](https://github.com/smdogroup/flume/actions/workflows/test.yml)
 
 <h2 align="center">
-    <img src="docs/source/_static/Flume_Logo.svg" width="600" />
+    <img src="https://raw.githubusercontent.com/smdogroup/flume/main/docs/source/_static/Flume_Logo.svg" width="600" />
 </h2>
 
 # _Flume_
