@@ -9,7 +9,34 @@ class FlumePyOptSparseInterface:
 
     def __init__(self, flume_sys: System, callback=None, update=None):
         """
-        DOCS:
+        Creates an interface that is used to link an instance of a Flume System to an optimization problem constructed and driven through pyOptSparse. To perform the numeric optimization, the user should call the `optimize_system` method after constructing this object.
+
+        Parameters
+        ----------
+        flume_sys : System
+            Instance of a Flume System that represents the problem to be solved with the interface
+        callback : callable function, default None
+            This is a callable function that gets executed during every iteration of the _objConFun method during optimization. See below for the structure of the function
+        update : callable function, default None
+            This is a callable function that gets executed at the start of every iteration of the evalObjCon method during optimization. Nominally, this is used to do parameter updates, such as for a continuation strategy
+
+        Note
+        ----
+        The callback function is an arbitrary function that the user writes, and it will be called at the end of every _objconGradFun execution. It is required that the function is setup such that it takes in two arguments:
+
+        def user_callback(xdict, it_number):
+            ...
+
+        Here, the parameters are:
+            xdict : dictionary that specifies the current design variable values for the optimization problem
+            it_number : current iteration number for the system
+
+        The update function is also a function that the user can optionally provide, and it will be called at the start of every evalObjCon execution. This method is primarily used for updating parameters within the Flume System (e.g. for continuation strategies in topology optimization), and it is structured as follows:
+
+        def user_update(it_number):
+            ...
+
+        where it_number is the current iteration number for the system
         """
 
         # Store the flume system as an attribute
@@ -26,7 +53,14 @@ class FlumePyOptSparseInterface:
 
     def _set_system_variables(self, xdict: dict, it_counter: int):
         """
-        DOCS:
+        Private method that is used to set the design variables values provided in the input dictionary into the various Flume Analysis objects.
+
+        Parameters
+        ----------
+        xdict : dict
+            Dictionary that specifies the current design point for the optimization problem. The keys are the global variable names, and the values are the numeric values for the design variables in the System
+        it_counter : int
+            Iteration number for the optimization
         """
 
         # Since system variables are being set, all analysis objects must be recomputed
@@ -58,7 +92,19 @@ class FlumePyOptSparseInterface:
 
     def _objconfun(self, xdict: dict):
         """
-        DOCS:
+        Method which is responsible for computing the objective and constraint function values at the current design point. Uses Flume internally to compute the quantities of interest. Internally, this method also first triggers the execution of the user's provided `update` function (if any) and Flume's logging procedure after the objective and constraints have been evaluated.
+
+        Parameters
+        ----------
+        xdict : dict
+            Dictionary that specifies the current design point for the optimization problem
+
+        Returns
+        -------
+        funcs : dict
+            Dictionary whose keys correspond to the local names for the objective and constraint functions in the System and whose values are the numeric values for those quantities
+        fail : bool
+            Boolean flag that indicates whether the analysis failed (returns False if everything was evaluated correctly)
         """
 
         # Call the update function, if it was provided
@@ -83,10 +129,7 @@ class FlumePyOptSparseInterface:
 
         # Extract the objective function output
         self.obj_name = self.flume_sys.obj_local_name
-        obj = (
-            self.flume_sys.obj_analysis.outputs[self.obj_name].value
-            * self.flume_sys.obj_scale
-        )
+        obj = self.flume_sys.obj_analysis.outputs[self.obj_name].value
 
         # Store the objective function value in the funcs dictionary
         funcs = {}
@@ -118,7 +161,19 @@ class FlumePyOptSparseInterface:
 
     def _objconGradFun(self, xdict: dict, funcs: dict):
         """
-        DOCS:
+        Method which is responsible for computing the design sensitivities for the optimization problem. Uses Flume to compute the derivatives using the adjoint method. Internally, this also executes the user's provided `callback` function (if any) and Flume's profiling procedure after the derivatives are evaluated.
+
+        Parameters
+        ----------
+        xdict : dict
+            Dictionary that specifies the current design point for the optimization problem
+        funcs : dict
+            Dictionary that specifies the objective and constraint values at the current design point.
+
+        Returns
+        -------
+        grad_vals : dict
+            A dictionary that specifies the analytic derivatives, computed using the adjoint method. Structured as a dictionary with format as grad_vals = {output_name: {var_name: ndarray}}. For vector-valued constraints, the innery array has shape (con_size, n_vars).
         """
 
         # Check to make sure that the objective analysis info has been set, otherwise raise an error
@@ -150,7 +205,7 @@ class FlumePyOptSparseInterface:
             )
 
             # Store the gradient info in the dictionary
-            grad_vals[obj_name][var] = gradx_i
+            grad_vals[obj_name][var] = gradx_i * self.flume_sys.obj_scale
 
         # Loop through the constraints in the System
         for con in self.flume_sys.con_info:
@@ -159,45 +214,57 @@ class FlumePyOptSparseInterface:
 
             grad_vals[con_name] = {}
 
-            # Set the seed for the current constraint
-            con_val = self.flume_sys.con_info[con]["instance"].outputs[con_name].value
+            # Extract the size of the constraint
+            con_size = self.flume_sys.con_info[con]["size"]
 
-            if isinstance(con_val, float):
-                seed = 1.0
-            elif isinstance(con_val, np.ndarray):
-                seed = np.ones_like(con_val)
-            else:
-                raise RuntimeError(
-                    f"The type for the constraint value '{con_name}' is not a float or NumPy array, which is unexpected behavior."
+            # Extract the RHS for the constraint
+            rhs = self.flume_sys.con_info[con]["rhs"]
+
+            # Loop through by the size of the constraint (each entry in the array is effectively a separate constraint) and evaluate the derivatives
+            for i in range(con_size):
+                # Set the seed for the current constraint
+                if con_size == 1:
+                    seed = 1.0
+                else:
+                    seed = np.zeros(con_size)
+                    seed[i] = 1.0
+
+                # Add the output seed
+                self.flume_sys.con_info[con]["instance"]._add_output_seed(
+                    outputs=[con_name], seed=seed
                 )
 
-            # Add the output seed
-            self.flume_sys.con_info[con]["instance"]._add_output_seed(
-                outputs=[con_name], seed=seed
-            )
-
-            # Perform the adjoint analysis
-            self.flume_sys.con_info[con]["instance"].analyze_adjoint(debug_print=False)
-
-            # Loop through the variables in the system
-            for var in self.flume_sys.design_vars_info:
-                # Extract the derivative value for the current constraint and variable combination
-                local_var_name = self.flume_sys.design_vars_info[var]["local_name"]
-
-                gradc_i = (
-                    self.flume_sys.design_vars_info[var]["instance"]
-                    .variables[local_var_name]
-                    .deriv
+                # Perform the adjoint analysis
+                self.flume_sys.con_info[con]["instance"].analyze_adjoint(
+                    debug_print=False
                 )
 
-                # Assign the gradient value into the grad_vals dictionary
-                grad_vals[con_name][var] = gradc_i
+                # Loop through the variables in the system
+                for var in self.flume_sys.design_vars_info:
+                    # Extract the derivative value for the current constraint and variable combination
+                    local_var_name = self.flume_sys.design_vars_info[var]["local_name"]
+
+                    gradc_i = (
+                        self.flume_sys.design_vars_info[var]["instance"]
+                        .variables[local_var_name]
+                        .deriv
+                    )
+
+                    # Apply the scaling, if necessary
+                    if rhs != 0.0:
+                        gradc_i /= abs(rhs)
+
+                    # Assign the gradient value into the grad_vals dictionary
+                    if i > 0:
+                        current = grad_vals[con_name][var]
+                        grad_vals[con_name][var] = np.vstack((current, gradc_i))
+                    else:
+                        grad_vals[con_name][var] = gradc_i
 
         # Add the profiling information for the current iteration
         self.flume_sys.profile_iteration(self.it_counter - 1)
 
         # Call the callback function, if it was provided
-        # FIXME: need to document the callback function here, as the callback takes in xdict instead of x (unlike the ParOpt interface)
         if self.callback is not None:
             self.callback(xdict, self.it_counter - 1)
 
@@ -205,14 +272,18 @@ class FlumePyOptSparseInterface:
 
     def _addVarGroups(self, x0dict: dict, optProb: Optimization):
         """
-        DOCS:
+        Private method used to add the variable groups to the Optimization object. Returns nothing, but internally adds the variables specified in the Flume System to the pyOptSparse optimization problem.
+
+        Parameters
+        ----------
+        x0dict : dict
+            Dictionary that specifies the initial point for the optimization
+        optProb : Optimization
+            Instance of the Optimization class, which specifies the structure of the optimization problem of interest
         """
 
         # Add the design variables to the problem
         for var in self.flume_sys.design_vars_info:
-
-            # Extract the local name for the current variable
-            local_name = self.flume_sys.design_vars_info[var]["local_name"]
 
             # Extract the lower bound value, if it exists
             if "lb" in self.flume_sys.design_vars_info[var]:
@@ -249,7 +320,16 @@ class FlumePyOptSparseInterface:
 
     def _addConGroups(self, optProb: Optimization):
         """
-        DOCS:
+        Private method used to add the constraint groups to the Optimization object. Returns nothing, but internally adds all of the constraints specified in the Flume System to the pyOptSparse optimization problem.
+
+        Parameters
+        ----------
+        optProb : Optimization
+            Instance of the Optimization class, which specifies the structure of the optimization problem of interest
+
+        Note
+        ----
+        If a constraint specified in the Flume System has `rhs != 0.0`, then that value for the right-hand side of the constraint is used as the scale for the pyOptSparse constraint groups. This means the optimizer will see constraints as `con(x) / abs(rhs_val)`.
         """
 
         # Loop through each constraint in the Flume System instance
@@ -273,28 +353,36 @@ class FlumePyOptSparseInterface:
             direction = self.flume_sys.con_info[con]["direction"]
             rhs_val = self.flume_sys.con_info[con]["rhs"]
 
+            # Get the values to scale the constraint and the value for the lower bound (note that the optimizer sees constraints as con_opt = con * scale)
+            if rhs_val == 0.0:
+                bound_val = 0.0
+                scale = 1.0
+            else:
+                scale = 1 / abs(rhs_val)
+                bound_val = np.sign(rhs_val)
+
             # Greater than inequality constraints
             if direction == "geq":
                 # If rhs = 0.0...
                 if rhs_val == 0.0:
                     optProb.addConGroup(
-                        name=con_name, nCon=con_size, lower=0.0, upper=None
+                        name=con_name, nCon=con_size, lower=bound_val, upper=None
                     )
                 # If rhs != 0.0...
                 else:
                     optProb.addConGroup(
                         name=con_name,
                         nCon=con_size,
-                        lower=1.0,
+                        lower=bound_val,
                         upper=None,
-                        scale=rhs_val,
+                        scale=scale,
                     )
             # Less than inequality constraints
             elif direction == "leq":
                 # If rhs = 0.0...
                 if rhs_val == 0.0:
                     optProb.addConGroup(
-                        name=con_name, nCon=con_size, lower=None, upper=0.0
+                        name=con_name, nCon=con_size, lower=None, upper=bound_val
                     )
                 # If rhs != 0.0...
                 else:
@@ -302,24 +390,24 @@ class FlumePyOptSparseInterface:
                         name=con_name,
                         nCon=con_size,
                         lower=None,
-                        upper=1.0,
-                        scale=rhs_val,
+                        upper=bound_val,
+                        scale=scale,
                     )
             # Equality constraints
             elif direction == "both":
                 # If rhs = 0.0...
                 if rhs_val == 0.0:
                     optProb.addConGroup(
-                        name=con_name, nCon=con_size, lower=0.0, upper=0.0
+                        name=con_name, nCon=con_size, lower=bound_val, upper=bound_val
                     )
                 # If rhs != 0.0...
                 else:
                     optProb.addConGroup(
                         name=con_name,
                         nCon=con_size,
-                        lower=1.0,
-                        upper=1.0,
-                        scale=rhs_val,
+                        lower=bound_val,
+                        upper=bound_val,
+                        scale=scale,
                     )
 
             else:
@@ -327,17 +415,35 @@ class FlumePyOptSparseInterface:
                     "Constraint direction must be 'geq', 'leq', or 'both'."
                 )
 
+        return
+
     def _construct_optimization_problem(
         self, opt_prob_name: str, x0dict: dict, optimizer: str, options: dict = None
     ) -> tuple[Optimizer, Optimization]:
         """
-        DOCS:
+        Private method used to construct the pyOptSparse Optimization and Optimizer objects for the numerical design optimization.
+
+        Parameters
+        ----------
+        opt_prob_name : str
+            Name to give to the optimization problem
+        x0dict : dict
+            Dictionary that specifies the initial point for the optimization
+        optimizer : str
+            The name of the optimizer to use for optimization, which defaults to SLSQP. Must be one of 'SLSQP', 'IPOPT', 'SNOPT', 'NLPQLP', 'NSGA2', 'PSQP', or 'CONMIN'.
+        options : dict
+            Dictionary of options that is provided to the optimizer. These were either specified by the user or are the default options for a given optimizer
+
+        Returns
+        -------
+        opt : Optimizer
+            Instance of a class that inherits from the Optimizer abstract class. Specifically, this will be an instance of the SLSQP, IPOPT, SNOPT, NLPQLP, NSSGA2, PSQP, or CONMIN class, depending on the input for the optimizer to use
+        optProb : Optimization
+            Instance of the Optimization class, which specifies the structure of the optimization problem of interest
         """
 
         # Construct the Optimization problem
-        optProb = Optimization(
-            name=opt_prob_name, objFun=self._objconfun, sens=self._objconGradFun
-        )
+        optProb = Optimization(name=opt_prob_name, objFun=self._objconfun)
 
         # Add the design variable groups to the problem
         self._addVarGroups(x0dict=x0dict, optProb=optProb)
@@ -366,9 +472,21 @@ class FlumePyOptSparseInterface:
             from pyoptsparse import SNOPT
 
             opt = SNOPT(options=options)
+        elif optimizer.lower() == "IPOPT".lower():
+            from pyoptsparse import IPOPT
+
+            opt = IPOPT(options=options)
+        elif optimizer.lower() == "NLPQLP".lower():
+            from pyoptsparse import NLPQLP
+
+            opt = NLPQLP(options=options)
+        elif optimizer.lower() == "CONMIN".lower():
+            from pyoptsparse import CONMIN
+
+            opt = CONMIN(options=options)
         else:
-            raise NotImplementedError(
-                f"Optimizer by the name of '{optimizer}' not yet implemented."
+            raise RuntimeError(
+                f"Optimizer by the name of '{optimizer} ' is not supported."
             )
 
         return opt, optProb
@@ -379,18 +497,29 @@ class FlumePyOptSparseInterface:
         opt_prob_name: str,
         optimizer: str = "SLSQP",
         options: dict = None,
-        output_dir: str = ".",
-        # TODO: determine if an option to store History file should go here
+        history_filename: str = None,
     ) -> Solution:
         """
-        DOCS:
+        Performs optimization on the Flume System, interfaced with pyOptSparse, using the optimizer specified by the user. If using a proprietary optimizer (i.e. SNOPT or NLPQLP), it is assumed that the user already has access to the optimizer. Additionally, it is assumed IPOPT is already installed if the user wants to use this optimizer.
+
+        Parameters
+        ----------
+        x0dict : dict
+            Dictionary that provides the initial point from which the optimization will progress. Structured such that the keys are the global variable names, and the values are the numeric values to use
+        opt_prob_name : str
+            Name that is provided to the optimization problem constructed with pyOptSparse
+        optimizer : str
+            The name of the optimizer to use for optimization, which defaults to SLSQP. Must be one of 'SLSQP', 'IPOPT', 'SNOPT', 'NLPQLP', 'NSGA2', 'PSQP', or 'CONMIN'.
+        options : dict
+            Dictionary of options that is provided to the optimizer. If not provided, defaults to None, and the default options for the specified optimizer are used (see pyOptSparse documentation for details)
+        history_filename : str
+            Name to use for the pyOptSparse History file. The full filepath is set as `os.path.join(self.flume_sys.log_prefix, history_filename)`. If not provided, no History file is written.
+
+        Returns
+        -------
+        sol : Solution
+            Returns an instance of the pyOptSparse Solution class, which describes the solution for an optimization problem. The final design variables, objective, and Lagrange multipleirs can be accesses with sol.xStar, sol.fStar, and sol.lambdaStar, respectively
         """
-
-        # ic(optimizer)
-
-        # Get default options if user did not provide them directly
-        # if options is None:
-        #     options = self._get_default_options(optimizer=optimizer)
 
         # Construct the optimization problem
         opt, optProb = self._construct_optimization_problem(
@@ -404,17 +533,28 @@ class FlumePyOptSparseInterface:
         if options is None:
             self._update_options_output_directory(optimizer, opt)
 
+        # Set the filepath for the History file, if provided by the user
+        if history_filename is not None:
+            storeHistory = os.path.join(self.flume_sys.log_prefix, history_filename)
+        else:
+            storeHistory = None
+
         # Perform the optimization
-        sol = opt(
-            optProb, sens=self._objconGradFun
-        )  # TODO: need to set this to be the sensitivity function, not FD
+        sol = opt(optProb, sens=self._objconGradFun, storeHistory=storeHistory)
 
         # Return the solution
         return sol
 
     def _update_options_output_directory(self, optimizer: str, opt: Optimizer):
         """
-        DOCS:
+        Private method used to get the default options for a given optimizer name. Uses the default options specified in the pyOptSparse documentation, but overwrites the output file locations so that they are stored in the directory associated with the Flume System.
+
+        Parameters
+        ----------
+        optimizer : str
+            Optimizer name used for the optimization
+        opt : Optimizer
+            Instance of the Optimizer class, which is used to drive the optimization
         """
 
         # Update the output file names with the Flume output directory for each optimizer
@@ -437,7 +577,17 @@ class FlumePyOptSparseInterface:
             options["Summary file"] = os.path.join(
                 self.flume_sys.log_prefix, "SNOPT_summary.out"
             )
-            options["Verify level"] = 3
+        elif optimizer.lower() == "ipopt":
+            options = opt.getOptions()
+            options["output_file"] = os.path.join(
+                self.flume_sys.log_prefix, "IPOPT.out"
+            )
+        elif optimizer.lower() == "nlpqlp":
+            options = opt.getOptions()
+            options["iFile"] = os.path.join(self.flume_sys.log_prefix, "NLPQLP.out")
+        elif optimizer.lower() == "conmin":
+            options = opt.getOptions()
+            options["IFILE"] = os.path.join(self.flume_sys.log_prefix, "CONMIN.out")
         else:
             raise NotImplementedError(
                 f"Have not implemented default options for optimizer '{optimizer}' yet."

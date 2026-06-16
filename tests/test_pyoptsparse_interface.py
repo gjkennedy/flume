@@ -200,6 +200,7 @@ class TestThomsonProblem(unittest.TestCase):
             log_name=f"flume_{n_p}.log",
             log_prefix="tests/thomson_problem_pyoptsparse",
         )
+        self.sys = sys
 
         # Declare the design variables for the system
         sys.declare_design_vars(
@@ -210,7 +211,7 @@ class TestThomsonProblem(unittest.TestCase):
         )
 
         # Declare the objective
-        sys.declare_objective(global_obj_name="energy.f")
+        sys.declare_objective(global_obj_name="energy.f", obj_scale=1e-1)
 
         # Declare the constraints
         sys.declare_constraints(
@@ -248,10 +249,11 @@ class TestThomsonProblem(unittest.TestCase):
             x0dict=x0dict,
             opt_prob_name=f"ThomsonProblem_{n_p}_np",
             optimizer=optimizer,
+            history_filename="history.hst",
         )
 
         # Check that the potential energy at the final point matches the expected value
-        obj_val = sol.fStar
+        obj_val = sol.fStar / self.sys.obj_scale
 
         return obj_val
 
